@@ -57,8 +57,11 @@ export class AppApi extends Construct {
     const lambdaAFn = new lambdanode.NodejsFunction(this, "lambdaA", {
       ...appCommonFnProps,
       entry: `${__dirname}/../../lambdas/lambdaA.ts`,
+      environment: {
+        TABLE_NAME: table.tableName,
+        REGION: "eu-west-1",
+      },
     });
-
     const lambdaBFn = new lambdanode.NodejsFunction(this, "lambdaB", {
       ...appCommonFnProps,
       entry: `${__dirname}/../../lambdas/lambdaB.ts`,
@@ -81,6 +84,7 @@ export class AppApi extends Construct {
 
     // Permissions
     table.grantReadWriteData(lambdaBFn);
+    table.grantReadData(lambdaAFn);
 
     // REST App API
     const api = new apig.RestApi(this, "AppAPI", {
@@ -95,6 +99,9 @@ export class AppApi extends Construct {
         allowOrigins: ["*"],
       },
     });
+    const schedulesResource = api.root.addResource("schedules");
+    const schedulesWithId = schedulesResource.addResource("{cinemaId}");
+    schedulesWithId.addMethod("GET", new apig.LambdaIntegration(lambdaAFn));
 
     // Enable this only when required by an endpoint
     // const requestAuthorizer = new apig.RequestAuthorizer(
