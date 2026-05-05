@@ -23,10 +23,90 @@ export const handler: APIGatewayProxyHandlerV2 = async (
   try {
     console.log("Event: ", JSON.stringify(event));
 
+    // Verifying the authenticated usr and is the user is 'admin'
+    const cookies: CookieMap = parseCookies(event);
+
+    if (!cookies || !cookies.token) {
+      return {
+        statusCode: 401,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: "Unauthorized. No token provided." }),
+      };
+    }
+
+    const verifiedJwt: JwtToken = await verifyToken(
+      cookies.token,
+      process.env.USER_POOL_ID,
+      process.env.REGION!
+    );
+
+    if (!verifiedJwt) {
+      return {
+        statusCode: 401,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: "Unauthorized. Invalid token." }),
+      };
+    }
+
+    const username = (verifiedJwt as any)["cognito:username"];
+
+    if (username !== "admin") {
+      return {
+        statusCode: 403,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          message: "Forbidden. Only admin can add schedules.",
+        }),
+      };
+    }
+
+    // Body parsing
+    const body = event.body ? JSON.parse(event.body) : undefined;
+
+    if (!body || !body.cinemaId || !body.movieId || !body.screenNo) {
+      return {
+        statusCode: 400,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: "Missing required fields in request body." }),
+      };
+    }
+
+    const schedule: Schedule = {
+      cinemaId: body.cinemaId,
+      movieId: body.movieId,
+      screenNo: body.screenNo,
+    };
+
+    // Already existence for the same cinema + screen
+
+
+    const checkParams: QueryCommandInput = {
+      TableName: process.env.TABLE_NAME,
+      IndexName: "screenIx",
+      KeyConditionExpression: "pk = :pk AND screenNo = :screenNo",
+      ExpressionAttributeValues: {
+        ":pk": `s#${schedule.cinemaId}`,
+        ":screenNo": schedule.screenNo,
+      },
+    };
+
+    const existingSchedule = await client.send(new QueryCommand(checkParams));
+
+    if (existingSchedule.Items && existingSchedule.Items.length > 0) {
+      return {
+        statusCode: 400,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          message: `Screen ${schedule.screenNo} in cinema ${schedule.cinemaId} is already scheduled. Overwrites are not allowed.`,
+        }),
+      };
+    }
+
+    // Writing the new schedule to DynamoDB
     const dbSchedule: DBSchedule = {
-      pk: `s#1001`,
-      sk: `s#5`,
-      screenNo: 's4',
+      pk: `s#${schedule.cinemaId}`,
+      sk: `s#${schedule.movieId}`,
+      screenNo: schedule.screenNo,
     };
     await client.send(
       new PutCommand({
@@ -37,16 +117,18 @@ export const handler: APIGatewayProxyHandlerV2 = async (
       })
     );
     return {
-      statusCode: 200,
+      statusCode: 201,
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({
         message: "Saved to database",
+        schedule: dbSchedule,
       }),
     };
   } catch (error: any) {
     console.log(JSON.stringify(error));
     return {
       statusCode: 500,
-      headers: {
+      headers: { 
         "content-type": "application/json",
       },
       body: JSON.stringify({ error }),
